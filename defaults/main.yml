@@ -1,0 +1,14 @@
+instance_count: 2
+root_db_password: testpass
+mysql_database:
+     - name: testdb
+
+mysql_users:
+     - name: testuser1
+       pass: testpass1
+       priv: "*.*:ALL"
+
+     - name: testuser2
+       pass: testpass2
+       priv: "*.*:ALL"
+

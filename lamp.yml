@@ -1,0 +1,140 @@
+---
+- name: Provision an ec2 instance for LAMP
+  hosts: localhost
+  connection: local
+  gather_facts: False
+  vars:
+     key_name: vini
+     instance_type: t2.micro
+     security_group: my_securitygroup
+     image: ami-cab258a8
+     region: ap-southeast-2
+   
+  tasks:
+    - name: Loading variables
+      include_vars:
+       dir: 'defaults'
+       files_matching: 'main.yml'
+
+    - name: Create a security group
+      ec2_group:
+       name: "{{ security_group }}"
+       description: Security Group for webserver Servers
+       region: "{{ region }}"
+       rules:
+          - proto: tcp
+            from_port: 22
+            to_port: 22
+            cidr_ip: 0.0.0.0/0
+       rules_egress:
+           - proto: all
+             cidr_ip: 0.0.0.0/0
+
+    - name: launching ec2
+      ec2:
+       key_name: "{{key_name}}"
+       instance_type: "{{instance_type}}"
+       image: "{{image}}"
+       exact_count: "{{instance_count}}"
+       count_tag:
+        Name: lamp
+       user_data: |
+               #!/bin/sh
+               sudo apt-get update
+                
+       group: "{{security_group }}"
+       instance_tags:
+          Name: lamp
+       wait: true
+       region: "{{region}}"
+      register: ec2
+
+    - name: Wait for SSH to come up
+      wait_for: 
+        host: "{{ item.public_ip }}" 
+        port: 22 
+        state: started
+      with_items: "{{ec2.instances}}"
+
+    - name: Add new instance to host group
+      add_host:
+        hostname: "{{ item.public_ip }}"
+        groupname: webservers
+      with_items: "{{ ec2.instances }}"
+
+
+##Server configurations
+- name: Package  installation
+  hosts:
+     - tag_Name_lamp 
+     - webservers
+  gather_facts: True
+  remote_user: ubuntu
+  become: true
+  tasks:
+    - name: installing all required packages
+      apt: name={{item}} state=installed
+      with_items:
+       - apache2
+       - wget
+       - vim
+       - git
+       - mysql-server
+       - php7.0 
+       - libapache2-mod-php7.0
+       - php7.0-mysql
+       - php7.0-curl
+       - php7.0-gd
+       - php7.0-mcrypt
+       - php-memcache
+       - php7.0-xsl 
+       - php7.0-mbstring
+       - php7.0-opcache 
+       - php-apcu
+       - phpmyadmin
+       - python3-pip
+       - libmysqlclient-dev 
+      notify:
+       - restart apache2
+
+### For Ansible mysql_user module ###
+    - name: Install python mysql package
+      pip:
+       name: mysqlclient
+
+    - name: Loading variables
+      include_vars:
+       dir: 'defaults'
+       files_matching: 'main.yml'
+
+    - name: copying mysql client file to user profile
+      template: 
+         src: templates/.my.cnf
+         dest: ~/.my.cnf
+         mode: 0600
+
+    - name: Update mysql root password for root account
+      mysql_user: name=root host=localhost password={{ root_db_password }}
+
+    - name: ensure anonymous users are not in the database
+      mysql_user: name='' host={{ item }} state=absent
+      with_items:
+       - localhost
+       - "{{ ansible_hostname }}"
+
+    - name: remove the test database
+      mysql_db: name=test state=absent
+
+    - name: Create the databases
+      mysql_db: name={{ item.name }} state=present
+      with_items:
+       - "{{ mysql_database }}"
+
+    - name: Create the database users
+      mysql_user: name={{ item.name }}  password={{ item.pass}} priv={{ item.priv }}
+      with_items:
+       - "{{ mysql_users }}"
+
+  handlers:
+    - name: restart apache2
+      service: name=apache2 state=restarted
